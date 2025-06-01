@@ -1,0 +1,7 @@
+*.venv
+.venv
+*.env
+*.egg-info
+__pycache__/
+*.ipynb
+*.lock
