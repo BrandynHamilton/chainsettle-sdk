@@ -51,7 +51,7 @@ def main(settlement_id, settlement_type, network, counterparty,
 if __name__ == "__main__":
     import secrets
     settlement_id = secrets.token_hex(4)
-    settlement_type = "paypal"
+    settlement_type = "plaid"
     network = "base"
     payer = "0x38979DFdB5d8FD76FAD4E797c4660e20015C6a84"
     recipient_email = "onramp@settlement-ramp.com"

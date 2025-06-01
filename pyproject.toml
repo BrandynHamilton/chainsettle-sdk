@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chainsettle-sdk"
 version = "0.1.0"
-description = "SDK for ChainSettle integrations."
+description = "SDK for ChainSettle API integrations."
 readme = "README.md"
 requires-python = ">=3.7"
 license = "MIT"
