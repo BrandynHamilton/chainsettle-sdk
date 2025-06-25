@@ -5,6 +5,7 @@ from chainsettle_sdk.config import get_settings
 from chainsettle_sdk.utils.error_handler import handle_api_error
 import time
 import json
+import secrets
 
 global settings
 settings = get_settings()
@@ -18,6 +19,7 @@ class ChainSettleService:
         self.supported_asset_categories = settings.CHAINSETTLE_SUPPORTED_ASSET_CATEGORIES
         self.supported_jurisdictions = settings.CHAINSETTLE_SUPPORTED_JURISDICTIONS
         self.zero_address = settings.ZERO_ADDRESS
+        self.id_hash = None
 
         self.get_settlement_types()
         print(f"ChainSettle Node {'live' if self.is_ok() else 'not responding'} at {self.base_url}")
@@ -47,10 +49,10 @@ class ChainSettleService:
     @handle_api_error
     def initiate_attestation(
         self,
-        settlement_id: str,
         settlement_type: str,
         network: str,
         user_email: str,
+        settlement_id: Optional[str] = None,
         amount: Optional[float] = 0.0,
         witness: Optional[str] = None,
         counterparty: Optional[str] = None,
@@ -60,6 +62,8 @@ class ChainSettleService:
         """
         Initiates the attestation process for a settlement.
         """
+        if settlement_id is None:
+            settlement_id = secrets.token_hex(4)
         if witness is None:
             witness = self.zero_address
         if counterparty is None:
@@ -71,7 +75,7 @@ class ChainSettleService:
 
         payload = {
             "settlement_id": settlement_id,
-            "notify_email": user_email,
+            "user_email": user_email,
             "settlement_type": settlement_type,
             "network": network,
             "amount": amount,
@@ -86,16 +90,25 @@ class ChainSettleService:
             json=payload
         )
         response.raise_for_status()
+
+        self.id_hash = response.json().get('settlement_info').get("id_hash")
+
+        if self.id_hash:
+            print(f"Settlement initiated with ID Hash: {self.id_hash}")
             
         return response.json()
     
     @handle_api_error
-    def attest_settlement(self, settlement_id: str):
+    def attest_settlement(self, id_hash: Optional[str] = None):
         """
         Attests a settlement with the given ID.
         """
+        if id_hash is None:
+            if self.id_hash is None:
+                raise ValueError("No ID hash provided and no previous ID hash available.")
+            id_hash = self.id_hash
         payload = {
-            "settlement_id": settlement_id,
+            "id_hash": id_hash,
         }
         try:
             res = requests.post(f"{self.base_url}/api/attest_settlement", json=payload)
@@ -117,13 +130,18 @@ class ChainSettleService:
                 print(f"Attestation request failed: {e}")
 
     @handle_api_error
-    def get_settlement_status(self, settlement_id: str) -> Optional[int]:
+    def get_settlement_status(self, id_hash: Optional[str] = None) -> Optional[int]:
         """
         Obtains the status of a settlement.
         If the HTTP response is not 200, returns None instead of raising.
         """
+        if id_hash is None:
+            if self.id_hash is None:
+                raise ValueError("No ID hash provided and no previous ID hash available.")
+            id_hash = self.id_hash
+
         response = requests.get(
-            f"{self.base_url}/api/get_settlement_status/{settlement_id}"
+            f"{self.base_url}/api/get_settlement_status/{id_hash}"
         )
         if response.status_code != 200:
             return None
@@ -132,12 +150,18 @@ class ChainSettleService:
         return payload.get("status")
 
     @handle_api_error
-    def get_settlement_info(self, settlement_id: str) -> Dict:
+    def get_settlement_info(self, id_hash: Optional[str] = None) -> Dict:
         """
         Retrieves detailed information about a settlement.
         If the HTTP response is not 200, returns an empty dictionary.
         """
-        response = requests.get(f"{self.base_url}/api/get_settlement/{settlement_id}")
+
+        if id_hash is None:
+            if self.id_hash is None:
+                raise ValueError("No ID hash provided and no previous ID hash available.")
+            id_hash = self.id_hash
+
+        response = requests.get(f"{self.base_url}/api/get_settlement/{id_hash}")
         if response.status_code != 200:
             return {}
 
@@ -171,13 +195,20 @@ class ChainSettleService:
         return response.json()
     
     @handle_api_error
-    def store_salt(self, settlement_id: str, salt: str,
-                   email: str, recipient_email: str) -> Dict:
+    def store_salt(self, salt: str,
+                   email: str, recipient_email: str,
+                   id_hash: Optional[str] = None) -> Dict:
         """
         Stores a salt for a specific settlement.
         """
+
+        if id_hash is None:
+            if self.id_hash is None:
+                raise ValueError("No ID hash provided and no previous ID hash available.")
+            id_hash = self.id_hash
+
         payload = {
-            "settlement_id": settlement_id,
+            "id_hash": id_hash,
             "salt": salt,
             "email": email,
             "recipient_email": recipient_email
@@ -193,7 +224,7 @@ class ChainSettleService:
     @handle_api_error
     def poll_settlement_activity(
         self,
-        settlement_id: str,
+        id_hash: Optional[str] = None,
         statuses: Optional[List[int]] = None,
         interval: float = 5.0,
         max_attempts: int = 120
@@ -205,12 +236,17 @@ class ChainSettleService:
             Even if get_settlement_status(...) raises a 404 or similar “not found yet” error,
             we catch it below, sleep, and retry until max_attempts.
             """
+            if id_hash is None:
+                if self.id_hash is None:
+                    raise ValueError("No ID hash provided and no previous ID hash available.")
+                id_hash = self.id_hash
+
             if statuses is None:
-                statuses = [3, 4]  # e.g. 3=attested, 4=finalized
+                statuses = [3, 4]  # e.g. 3=confirmed, 4=failed
 
             for attempt in range(1, max_attempts + 1):
                 try:
-                    status_code = self.get_settlement_status(settlement_id)
+                    status_code = self.get_settlement_status(id_hash)
                     if status_code is None:
                         print(f"[Attempt {attempt}] status endpoint returned None (not found). Retrying in {interval}s...")
                         print("Ensure the salt is stored off-chain before polling.")
@@ -234,7 +270,7 @@ class ChainSettleService:
 
                 if status_code in statuses:
                     try:
-                        info = self.get_settlement_info(settlement_id)
+                        info = self.get_settlement_info(id_hash)
                         return info.get("data", info)
                     except requests.exceptions.RequestException as e:
                         print(f"[Attempt {attempt}] error fetching info: {e}. Retrying in {interval}s...")
@@ -245,6 +281,6 @@ class ChainSettleService:
                 time.sleep(interval)
 
             raise TimeoutError(
-                f"Settlement '{settlement_id}' did not reach statuses {statuses} "
+                f"Settlement '{id_hash}' did not reach statuses {statuses} "
                 f"after {max_attempts} attempts ({max_attempts * interval:.0f}s)."
             )

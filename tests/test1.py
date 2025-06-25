@@ -1,8 +1,9 @@
 from chainsettle_sdk import ChainSettleService
 import json
 
-def main(settlement_id, settlement_type, network, counterparty,
-            recipient_email, amount, metadata=None, user_email=None):
+def main(settlement_type, network, counterparty,
+            recipient_email, amount, settlement_id=None,  
+            witness=None, metadata=None, user_email=None):
 
     chainsettle = ChainSettleService()
     print("Supported Networks:", chainsettle.supported_networks)
@@ -21,6 +22,7 @@ def main(settlement_id, settlement_type, network, counterparty,
         amount=amount,
         recipient_email=recipient_email,
         counterparty = counterparty,
+        witness=witness,
         details=metadata,
         user_email=user_email
     )
@@ -30,17 +32,15 @@ def main(settlement_id, settlement_type, network, counterparty,
 
     if settlement_type == 'plaid':
 
-        chainsettle.poll_settlement_activity(settlement_id=settlement_id, statuses=[1]) # check if registered
+        chainsettle.poll_settlement_activity(statuses=[1]) # check if registered
 
-        resp = chainsettle.attest_settlement(
-            settlement_id=settlement_id
-        )
+        resp = chainsettle.attest_settlement()
 
         print("Settlement attested successfully.")
 
         print(f'resp',resp)
 
-    resp = chainsettle.poll_settlement_activity(settlement_id=settlement_id)
+    resp = chainsettle.poll_settlement_activity()
 
     if resp:
         print("Settlement activity polled successfully.")
@@ -50,24 +50,22 @@ def main(settlement_id, settlement_type, network, counterparty,
 
 if __name__ == "__main__":
     import secrets
-    settlement_id = secrets.token_hex(4)
-    settlement_type = "plaid"
+    settlement_type = "paypal"
     network = "base"
-    payer = "0x38979DFdB5d8FD76FAD4E797c4660e20015C6a84"
+    counterparty = "0x38979DFdB5d8FD76FAD4E797c4660e20015C6a84"
     recipient_email = "onramp@settlement-ramp.com"
     amount = 10000
     user_email = "brandynham1120@gmail.com"
-    counterparty = ""
-    witness = ""
+    witness = "0x6f8550D4B3Af628d5eDe06131FE60A1d2A5DE2Ab"
     metadata = "Test settlement for ChainSettle SDK"
 
     print("Running ChainSettle SDK Test")
 
     main(
-        settlement_id=settlement_id,
         settlement_type=settlement_type,
         network=network,
         counterparty=counterparty,
+        witness=witness,
         recipient_email=recipient_email,
         amount=amount,
         user_email=user_email,
