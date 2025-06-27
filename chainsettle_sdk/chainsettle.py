@@ -1,3 +1,4 @@
+from token import OP
 import requests
 from typing import Dict, Optional, List
 from datetime import datetime
@@ -20,6 +21,7 @@ class ChainSettleService:
         self.supported_jurisdictions = settings.CHAINSETTLE_SUPPORTED_JURISDICTIONS
         self.zero_address = settings.ZERO_ADDRESS
         self.id_hash = None
+        self.ramp_contract = None
 
         self.get_settlement_types()
         print(f"ChainSettle Node {'live' if self.is_ok() else 'not responding'} at {self.base_url}")
@@ -284,3 +286,42 @@ class ChainSettleService:
                 f"Settlement '{id_hash}' did not reach statuses {statuses} "
                 f"after {max_attempts} attempts ({max_attempts * interval:.0f}s)."
             )
+
+    def poll_settlement_status_onchain(self, 
+        ramp_contract: Optional[object] = None, 
+        id_hash_bytes: Optional[bytes] = None,
+        max_attempts: Optional[int] = 60, 
+        delay: Optional[int] = 5,
+        statuses: Optional[List[int]] = [3, 4]) -> int:
+        """
+        Polls the on-chain settlement status every 5 seconds for up to 5 minutes (default).
+        Exits early if the status reaches 3 (Confirmed) or 4 (Failed).
+        """
+        status = None
+        
+        if id_hash_bytes is None:
+            if self.id_hash is None:
+                raise ValueError("No ID hash provided and no previous ID hash available.")
+            id_hash_bytes = bytes.fromhex(self.id_hash)
+        
+        if ramp_contract is None:
+            if self.ramp_contract is None:
+                raise ValueError("No ramp contract provided and no previous contract available.")
+            ramp_contract = self.ramp_contract
+
+        print(f"Polling settlement status for idHash: {id_hash_bytes.hex()} ...")
+        for attempt in range(1, max_attempts + 1):
+            # Fetch on-chain status
+            status = ramp_contract.functions.getSettlementStatus(id_hash_bytes).call()
+            print(f"[Attempt {attempt}] status: {status}")
+            
+            # If status is Confirmed (3) or Failed (4), exit early
+            if status in statuses:
+                print(f"Settlement finalized with status: {status}")
+                return status
+            
+            # Wait before next attempt
+            time.sleep(delay)
+        else:
+            print("Polling timed out after 5 minutes.")
+            return status
