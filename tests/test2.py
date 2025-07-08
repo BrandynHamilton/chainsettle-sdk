@@ -1,11 +1,46 @@
+from itertools import chain
 from chainsettle_sdk import ChainSettleService
+from web3 import Web3
 import json
+import os
 
 def main(settlement_type, network, counterparty,
             recipient_email, amount, settlement_id=None,  
             witness=None, metadata=None, user_email=None):
-
+    
+    BASE_DIR = os.path.dirname(__file__)
+    ABI_PATH = os.path.join(BASE_DIR, 'abi', 'settlementRegistryAbi.json')
+    
+    GATEWAY = os.getenv("GATEWAY", None)
+    if GATEWAY is None:
+        raise ValueError("GATEWAY environment variable is not set. Please set it to your Alchemy or Infura endpoint.")
+    
     chainsettle = ChainSettleService()
+
+    config = chainsettle.get_config_map()
+
+    CHAINSETTLE_SETTLEMENT_REGISTRY = config[network]['registry_addresses']['SettlementRegistry']
+    
+    # CHAINSETTLE_SETTLEMENT_REGISTRY = os.getenv("CHAINSETTLE_SETTLEMENT_REGISTRY", None)
+    if CHAINSETTLE_SETTLEMENT_REGISTRY is None:
+        raise ValueError("CHAINSETTLE_SETTLEMENT_REGISTRY environment variable is not set. Please set it to the settlement registry contract address.")
+    
+    if not os.path.exists(ABI_PATH):
+        raise FileNotFoundError(f"ABI file not found at {ABI_PATH}. Please ensure the ABI file is present in the specified path.")
+    
+    abi = json.load(open(ABI_PATH, 'r'))
+    
+    w3 = Web3(Web3.HTTPProvider(GATEWAY))
+    if not w3.is_connected():
+        raise ConnectionError("Failed to connect to the Ethereum network. Please check your GATEWAY URL.")
+    
+    contract = w3.eth.contract(
+        address=Web3.to_checksum_address(CHAINSETTLE_SETTLEMENT_REGISTRY),
+        abi=abi
+    )
+
+    chainsettle = ChainSettleService(contract=contract)
+
     print("Supported Networks:", chainsettle.supported_networks)
     print("Supported APIs:", chainsettle.supported_apis)
     print("Supported Asset Categories:", chainsettle.supported_asset_categories)
@@ -32,7 +67,7 @@ def main(settlement_type, network, counterparty,
 
     if settlement_type == 'plaid':
 
-        chainsettle.poll_settlement_status_onchain(statuses=[1]) # check if registered
+        chainsettle.poll_settlement_status_onchain(statuses=[1], finalized_flag=False) # check if registered
 
         resp = chainsettle.attest_settlement()
 
@@ -53,8 +88,8 @@ if __name__ == "__main__":
     settlement_type = "paypal"
     network = "base"
     counterparty = "0x38979DFdB5d8FD76FAD4E797c4660e20015C6a84"
-    recipient_email = "onramp@settlement-ramp.com"
-    amount = 10000
+    recipient_email = "treasuryops@defiprotocol.com"
+    amount = 1000
     user_email = "brandynham1120@gmail.com"
     witness = "0x6f8550D4B3Af628d5eDe06131FE60A1d2A5DE2Ab"
     metadata = "Test settlement for ChainSettle SDK"

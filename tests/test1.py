@@ -32,7 +32,7 @@ def main(settlement_type, network, counterparty,
 
     if settlement_type == 'plaid':
 
-        chainsettle.poll_settlement_activity(statuses=[1]) # check if registered
+        chainsettle.poll_settlement_activity(statuses=[1], finalized_flag=False) # check if registered
 
         resp = chainsettle.attest_settlement()
 
@@ -50,11 +50,11 @@ def main(settlement_type, network, counterparty,
 
 if __name__ == "__main__":
     import secrets
-    settlement_type = "paypal"
+    settlement_type = "plaid"
     network = "base"
     counterparty = "0x38979DFdB5d8FD76FAD4E797c4660e20015C6a84"
-    recipient_email = "onramp@settlement-ramp.com"
-    amount = 10000
+    recipient_email = "treasuryops@defiprotocol.com"
+    amount = 1000
     user_email = "brandynham1120@gmail.com"
     witness = "0x6f8550D4B3Af628d5eDe06131FE60A1d2A5DE2Ab"
     metadata = "Test settlement for ChainSettle SDK"

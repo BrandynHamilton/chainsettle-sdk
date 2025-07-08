@@ -21,11 +21,7 @@ class Settings():
     # ChainSettle Configuration
     CHAINSETTLE_API_URL: ClassVar[str] = os.getenv(
         "CHAINSETTLE_API_URL",
-        "http://localhost:5045"
-    )
-    CHAINSETTLE_AKASH_URL: ClassVar[str] = os.getenv(
-        "CHAINSETTLE_AKASH_URL",
-        "https://gdvsns5685f696ufl48m643lc4.ingress.akash-palmito.org"
+        "https://app.chainsettle.tech"
     )
 
     # ChainSettle Contract Addresses

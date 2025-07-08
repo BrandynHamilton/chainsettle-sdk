@@ -1,3 +1,4 @@
+from gc import is_finalized
 from token import OP
 import requests
 from typing import Dict, Optional, List
@@ -7,21 +8,29 @@ from chainsettle_sdk.utils.error_handler import handle_api_error
 import time
 import json
 import secrets
+import os
 
 global settings
 settings = get_settings()
 
 class ChainSettleService:
-    def __init__(self):
+    def __init__(self, id_hash: Optional[str] = None, contract: Optional[object] = None, 
+                 account_address: Optional[str] = None):
+        """ Initializes the ChainSettleService with the given parameters.
+        Args:
+            id_hash (Optional[str]): The ID hash of the settlement.
+            contract (Optional[object]): The contract object for on-chain interactions.
+            account_address (Optional[str]): The account address for on-chain interactions.
+        """
         self.base_url = settings.CHAINSETTLE_API_URL
-        self.akash_url = settings.CHAINSETTLE_AKASH_URL
         self.supported_networks = settings.CHAINSETTLE_SUPPORTED_NETWORKS
         self.supported_apis = settings.CHAINSETTLE_SUPPORTED_APIS
         self.supported_asset_categories = settings.CHAINSETTLE_SUPPORTED_ASSET_CATEGORIES
         self.supported_jurisdictions = settings.CHAINSETTLE_SUPPORTED_JURISDICTIONS
         self.zero_address = settings.ZERO_ADDRESS
-        self.id_hash = None
-        self.ramp_contract = None
+        self.id_hash = id_hash
+        self.contract = contract
+        self.account_address = account_address if account_address is not None else os.getenv("ACCOUNT_ADDRESS", None)
 
         self.get_settlement_types()
         print(f"ChainSettle Node {'live' if self.is_ok() else 'not responding'} at {self.base_url}")
@@ -47,6 +56,15 @@ class ChainSettleService:
         self.supported_jurisdictions = data.get("supported_jurisdictions", [])
 
         return data
+    
+    @handle_api_error
+    def get_config_map(self) -> Dict:
+        """
+        Fetches the configuration map from the ChainSettle API.
+        """
+        response = requests.get(f"{self.base_url}/api/config")
+        response.raise_for_status()
+        return response.json()
 
     @handle_api_error
     def initiate_attestation(
@@ -88,7 +106,7 @@ class ChainSettleService:
         }
 
         response = requests.post(
-            f"{self.base_url}/api/init_attestation",
+            f"{self.base_url}/api/init_attest",
             json=payload
         )
         response.raise_for_status()
@@ -113,7 +131,7 @@ class ChainSettleService:
             "id_hash": id_hash,
         }
         try:
-            res = requests.post(f"{self.base_url}/api/attest_settlement", json=payload)
+            res = requests.post(f"{self.base_url}/api/attest", json=payload)
             res.raise_for_status()
             data = res.json()
 
@@ -149,7 +167,7 @@ class ChainSettleService:
             return None
 
         payload = response.json()
-        return payload.get("status")
+        return payload
 
     @handle_api_error
     def get_settlement_info(self, id_hash: Optional[str] = None) -> Dict:
@@ -180,7 +198,7 @@ class ChainSettleService:
         return response.json()
         
     @handle_api_error
-    def simulate_signing(self, envelope_id: str, recipient_id: str) -> Dict:
+    def simulate_signing(self, id_hash: str, envelope_id: str, recipient_id: str) -> Dict:
         """
         Simulates the signing of an envelope by a specific recipient.
         """
@@ -196,10 +214,19 @@ class ChainSettleService:
         response.raise_for_status()
         return response.json()
     
+    def generate_salt(self, length: Optional[str] = 16) -> str:
+        """
+        Generates a random salt for settlement.
+        """
+        return secrets.token_hex(length)
+    
     @handle_api_error
     def store_salt(self, salt: str,
-                   email: str, recipient_email: str,
-                   id_hash: Optional[str] = None) -> Dict:
+                   email: str, 
+                   recipient_email: Optional[str] = None,
+                   id_hash: Optional[str] = None,
+                   
+                   ) -> Dict:
         """
         Stores a salt for a specific settlement.
         """
@@ -228,68 +255,76 @@ class ChainSettleService:
         self,
         id_hash: Optional[str] = None,
         statuses: Optional[List[int]] = None,
+        finalized_flag: bool = True,
         interval: float = 5.0,
         max_attempts: int = 120
-        ) -> Dict:
-            """
-            Polls the API until the settlement reaches one of the given statuses,
-            and then returns the full settlement-info dictionary.
+    ) -> Dict:
+        """
+        Polls the API until the settlement reaches one of the given statuses
+        and matches the finalized_flag condition. Then returns the full
+        settlement-info dictionary.
+        """
+        if id_hash is None:
+            if self.id_hash is None:
+                raise ValueError("No ID hash provided and no previous ID hash available.")
+            id_hash = self.id_hash
 
-            Even if get_settlement_status(...) raises a 404 or similar “not found yet” error,
-            we catch it below, sleep, and retry until max_attempts.
-            """
-            if id_hash is None:
-                if self.id_hash is None:
-                    raise ValueError("No ID hash provided and no previous ID hash available.")
-                id_hash = self.id_hash
+        if statuses is None:
+            statuses = [3, 4]  # confirmed or failed
 
-            if statuses is None:
-                statuses = [3, 4]  # e.g. 3=confirmed, 4=failed
+        for attempt in range(1, max_attempts + 1):
+            try:
+                status_response = self.get_settlement_status(id_hash)
+                status_code = status_response.get("status_enum")
+                is_finalized = status_response.get("is_finalized", False)
 
-            for attempt in range(1, max_attempts + 1):
-                try:
-                    status_code = self.get_settlement_status(id_hash)
-                    if status_code is None:
-                        print(f"[Attempt {attempt}] status endpoint returned None (not found). Retrying in {interval}s...")
-                        print("Ensure the salt is stored off-chain before polling.")
+                if status_code is None:
+                    print(f"[Attempt {attempt}] Status is None. Retrying in {interval}s...")
+                    time.sleep(interval)
+                    continue
+            except requests.exceptions.RequestException as e:
+                if hasattr(e, "response") and e.response is not None:
+                    code = e.response.status_code
+                    if code == 404:
+                        print(f"[Attempt {attempt}] 404 not found. Retrying in {interval}s...")
                         time.sleep(interval)
                         continue
-                except requests.exceptions.RequestException as e:
-                    if hasattr(e, "response") and e.response is not None:
-                        code = e.response.status_code
-                        if code == 404:
-                            print(f"[Attempt {attempt}] status endpoint returned 404 (not created yet). Retrying in {interval}s...")
-                            time.sleep(interval)
-                            continue
-                        else:
-                            print(f"[Attempt {attempt}] HTTP error {code} when fetching status. Retrying in {interval}s...")
-                            time.sleep(interval)
-                            continue
                     else:
-                        print(f"[Attempt {attempt}] error fetching status: {e}. Retrying in {interval}s...")
+                        print(f"[Attempt {attempt}] HTTP error {code}. Retrying in {interval}s...")
                         time.sleep(interval)
                         continue
+                else:
+                    print(f"[Attempt {attempt}] Unknown error: {e}. Retrying in {interval}s...")
+                    time.sleep(interval)
+                    continue
 
-                if status_code in statuses:
-                    try:
-                        info = self.get_settlement_info(id_hash)
-                        return info.get("data", info)
-                    except requests.exceptions.RequestException as e:
-                        print(f"[Attempt {attempt}] error fetching info: {e}. Retrying in {interval}s...")
-                        time.sleep(interval)
-                        continue
+            # Only return if both the status matches and finalization flag matches
+            if status_code in statuses and is_finalized == finalized_flag:
+                try:
+                    info = self.get_settlement_info(id_hash)
+                    return info.get("data", info)
+                except requests.exceptions.RequestException as e:
+                    print(f"[Attempt {attempt}] error fetching info: {e}. Retrying in {interval}s...")
+                    time.sleep(interval)
+                    continue
 
-                print(f"[Attempt {attempt}] status {status_code} is not in {statuses} → waiting {interval}s to retry...")
-                time.sleep(interval)
-
-            raise TimeoutError(
-                f"Settlement '{id_hash}' did not reach statuses {statuses} "
-                f"after {max_attempts} attempts ({max_attempts * interval:.0f}s)."
+            print(
+                f"[Attempt {attempt}] status={status_code}, finalized={is_finalized} "
+                f"→ waiting {interval}s to retry..."
             )
+            time.sleep(interval)
+
+        raise TimeoutError(
+            f"Settlement '{id_hash}' did not meet conditions (statuses={statuses}, "
+            f"finalized={finalized_flag}) after {max_attempts} attempts "
+            f"({max_attempts * interval:.0f}s)."
+        )
 
     def poll_settlement_status_onchain(self, 
-        ramp_contract: Optional[object] = None, 
+        contract: Optional[object] = None, 
         id_hash_bytes: Optional[bytes] = None,
+        account_address: Optional[str] = None,
+        finalized_flag: bool = True,
         max_attempts: Optional[int] = 60, 
         delay: Optional[int] = 5,
         statuses: Optional[List[int]] = [3, 4]) -> int:
@@ -304,19 +339,31 @@ class ChainSettleService:
                 raise ValueError("No ID hash provided and no previous ID hash available.")
             id_hash_bytes = bytes.fromhex(self.id_hash)
         
-        if ramp_contract is None:
-            if self.ramp_contract is None:
+        if contract is None:
+            if self.contract is None:
                 raise ValueError("No ramp contract provided and no previous contract available.")
-            ramp_contract = self.ramp_contract
+            contract = self.contract
+        
+        if account_address is None:
+            if self.account_address is None:
+                raise ValueError("No account address provided and no previous address available.")
+            account_address = self.account_address
 
         print(f"Polling settlement status for idHash: {id_hash_bytes.hex()} ...")
         for attempt in range(1, max_attempts + 1):
             # Fetch on-chain status
-            status = ramp_contract.functions.getSettlementStatus(id_hash_bytes).call()
-            print(f"[Attempt {attempt}] status: {status}")
+            try:
+                status = contract.functions.getSettlementStatus(id_hash_bytes).call({'from': account_address})
+                is_finalized = contract.functions.isFinalized(id_hash_bytes).call({'from': account_address})
+            except Exception as e:
+                print(f"[Attempt {attempt}] Error fetching on-chain status: {e}")
+                time.sleep(delay)
+                continue
+
+            print(f"[Attempt {attempt}] status: {status}, finalized: {is_finalized}")
             
             # If status is Confirmed (3) or Failed (4), exit early
-            if status in statuses:
+            if status in statuses and is_finalized == finalized_flag:
                 print(f"Settlement finalized with status: {status}")
                 return status
             
